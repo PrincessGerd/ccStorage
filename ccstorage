@@ -12,9 +12,11 @@ loadAPI("utils", "dyvydHtK")
 if not os.loadAPI("ledger") then error("Failed to load ledger API") end
 if not os.loadAPI("itemtransfer") then error("Failed to load itemtransfer API") end
 
+-- local variables
 local LOCAL_DB_PATH = "db/storage_"
 local LEDGER_DB_PATH = "db/ledger.json"
-
+local LOCAL_MODEM_SIDE = "right"
+local TURTLE_ID = 21
 
 local OPPERATIONAL = 0
 local DB_CORRUPTION_FAULT = -1          -- item slot indexing is corrupted
@@ -54,10 +56,10 @@ end
 local function selectRegister(reg)
     if(reg == "top") then
         internal_state.register = "top"
-        internal_state.workerId = "turtle_"..os.getComputerID() 
+        internal_state.workerId = "turtle_"..TURTLE_ID 
     elseif(reg == "bottom") then
         internal_state.register = "bottom"
-        internal_state.workerId = "turtle_"..(os.getComputerID() + 1)
+        internal_state.workerId = "turtle_"..(TURTLE_ID + 1)
     end
     return internal_state.register
 end
@@ -68,7 +70,7 @@ local function init(register, db_path, ledger_path, return_address)
     internal_state.register = register
     internal_state.storage.top = initStorage("top")
     internal_state.storage.bottom = initStorage("bottom")
-    internal_state.workerId = "turtle_"..os.getComputerID() or "turtle_15"
+    internal_state.workerId = "turtle_"..TURTLE_ID
     print("initialised: " .. internal_state.workerId)
 end
 
@@ -106,6 +108,7 @@ local function safe_fetch(itemName, qty, itemDamage)
         print("DB_CORRUPTION_FAULT")
         return ret_len
     end
+    internal_state.lastTransaction = storage.ledger_internal:getLastTransaction()
     return ret_len
 end
 
@@ -128,6 +131,7 @@ local function safe_deposit(itemName, qty, itemDamage)
         return deposited_total
     end
     print("deposited")
+    internal_state.lastTransaction = storage.ledger_internal:getLastTransaction()
     return deposited_total
 end
 
@@ -136,7 +140,7 @@ end
 local LOCAL_CHANNEL=666
 local PING_LIMIT = 10
 
-modem =  peripheral.wrap("right") or error("No modem found")
+modem =  peripheral.wrap(LOCAL_MODEM_SIDE) or error("No modem found")
 modem.open(LOCAL_CHANNEL)
 
 
@@ -162,7 +166,26 @@ local messageHander ={
         local parts = utils.getSplits(message, "|")
         local selection = selectRegister(parts[2])
         return string.format("selectRegister|%s|", parts[2])
-    end
+    end,
+
+    ["lookup"]= function(replyChannel, message)
+        local parts = utils.getSplits(message, "|")
+        local storage = getActiveStorage()
+        local count = storage:lookup(parts[2], tonumber(parts[3]) or 0)
+        return string.format("lookup|%s|%d|", parts[2], count)
+    end,
+
+    ["getLastTransaction"]= function(replyChannel, message)
+        local storage = getActiveStorage()
+        local lt = storage.ledger_internal:getLastTransaction()
+        print(lt.item)
+        local ret_str =  "" 
+        if ((lt ~= nil) and (lt ~= {})) then
+           ret_str = string.format("getLastTransaction|%s|%s|%s|%d", lt.source,lt.destination, lt.item,lt.quantity)
+        end
+        return ret_str
+    end,
+
 }
 
 
@@ -189,14 +212,18 @@ event.addHandler("modem_message",handleMessages)
 
 function mainloop()
     while true do
-        --local startTime = os.clock()
+        local startTime = os.clock()
         
         -- Handle events with timeout
         event.handleCCEvents(0.5)
         
-        -- Perform periodic tasks every 10 seconds
-        --if os.clock() % 10 < 0.1 then
-        --end
+        --Perform periodic tasks every 10 seconds
+        if os.clock() % 20 < 0.1 then
+            print("serialising databases")
+            local storage = getActiveStorage()
+            storage.ledger_internal:save()
+            storage.ledger_internal:load() 
+        end
     end
 end
 
@@ -211,5 +238,5 @@ end
  
 -- Start the system
 protectedRun()
-
+modem.close()
 print("ENDED GRACEFULLY")

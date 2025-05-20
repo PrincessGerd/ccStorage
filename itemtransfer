@@ -4,14 +4,24 @@ itemtransfer.__index = itemtransfer
 
 function init(ledger)
     local self = setmetatable({}, itemtransfer)
-    self.ledger = ledger
-    assert(self.ledger ~= nil, "ledger must be provided")
+    self.ledger_internal = ledger
+    assert(self.ledger_internal ~= nil, "ledger must be provided")
     return self
 end
 
+function itemtransfer:lookup(itemName, qty)
+    local item =  self.ledger_internal:getItemData(itemName)
+    if (qty == nil) then qty = 0 end
+    if (item.slots ~= {}) and (item.count < qty) then
+        return item.count
+    end
+    return -1
+end
+
+
 function itemtransfer:deposit(itemName, qty, itemDamage, fromChest)
-    print(itemName .. "|" .. qty .. "|" .. itemDamage .. "|" .. fromChest)
-    local item =  self.ledger:getItemData(itemName)
+    --print(itemName .. "|" .. qty .. "|" .. itemDamage .. "|" .. fromChest)
+    local item =  self.ledger_internal:getItemData(itemName)
     local remaining = qty
     local depositedTotal = 0
     
@@ -24,7 +34,7 @@ function itemtransfer:deposit(itemName, qty, itemDamage, fromChest)
             
             local deposited = peripheral.call(slot.chest, "pullItems", fromChest, 1, toDeposit, slot.index)
             if deposited > 0 then
-                self.ledger:updateItemInDatabase(itemName, itemDamage, deposited, slot.chest, slot.index, "DEPOSIT")
+                self.ledger_internal:updateItemInDatabase(itemName, itemDamage, deposited, slot.chest, slot.index, "DEPOSIT")
                 remaining = remaining - deposited
                 depositedTotal = depositedTotal + deposited
             end
@@ -33,7 +43,7 @@ function itemtransfer:deposit(itemName, qty, itemDamage, fromChest)
     
     -- if not then use free slots
     if remaining > 0 then
-        local freeSlots = self.ledger:getFreeSlots()
+        local freeSlots = self.ledger_internal:getFreeSlots()
         local neededSlots = math.ceil(remaining / item.maxCount)
         for i = 1, math.min(neededSlots, #freeSlots.slots) do
             if remaining <= 0 then break end
@@ -43,19 +53,19 @@ function itemtransfer:deposit(itemName, qty, itemDamage, fromChest)
             
             local deposited = peripheral.call(slot.chest, "pullItems", fromChest, 1, toDeposit, slot.index)
             if deposited > 0 then
-                self.ledger:updateItemInDatabase(itemName, itemDamage, deposited, slot.chest, slot.index, "DEPOSIT")
+                self.ledger_internal:updateItemInDatabase(itemName, itemDamage, deposited, slot.chest, slot.index, "DEPOSIT")
                 remaining = remaining - deposited
                 depositedTotal = depositedTotal + deposited
                 table.remove(freeSlots.slots, i)
             end
         end
-        self.ledger:setFreeSlots(freeSlots)
+        self.ledger_internal:setFreeSlots(freeSlots)
     end
     return depositedTotal
 end
 
 function itemtransfer:fetch(itemName, qty, itemDamage, toChest)
-    local item =  self.ledger:getItemData(itemName)
+    local item =  self.ledger_internal:getItemData(itemName)
     local remaining = qty
     local fetchedTotal = 0
     
@@ -69,7 +79,7 @@ function itemtransfer:fetch(itemName, qty, itemDamage, toChest)
             local fetched = peripheral.call(slot.chest, "pushItems", toChest, slot.index, toFetch, 1)
             
             if fetched > 0 then
-                self.ledger:updateItemInDatabase(itemName, slot.damage, -fetched, slot.chest, slot.index, "WITHDRAWAL")
+                self.ledger_internal:updateItemInDatabase(itemName, slot.damage, -fetched, slot.chest, slot.index, "WITHDRAWAL")
                 remaining = remaining - fetched
                 fetchedTotal = fetchedTotal + fetched
             end

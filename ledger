@@ -23,20 +23,22 @@ function init(db_path, ledger_path)
 end
 
 function ledger:load()
-    if self.storage_db == nil then
-        self.storage_db:save()
-    end
-    if self.ledger_db == nil then
-        self.ledger_db:save()
-    end
+    self.storage_db = Database.load(self.LOCAL_DB_PATH)
+    self.ledger_db = Database.load(self.LEDGER_DB_PATH)
 end
 
 function ledger:save()
     if self.storage_db ~= nil then
-        self.storage_db = Database.load(self.LOCAL_DB_PATH)
+        self.storage_db:save()
     end
     if self.ledger_db ~= nil then
-        self.ledger_db = Database.load(self.LEDGER_DB_PATH)
+        self.ledger_db:save()
+    end
+end
+
+function ledger:saveLedger()
+    if self.ledger_db ~= nil then
+        self.ledger_db:save()
     end
 end
 
@@ -87,8 +89,7 @@ end
 function ledger:addLedgerEntry(transactionType, itemName, itemDamage, quantity, source, destination, details)
     local tansaction_list = self.ledger_db:get("transactions") or {}
     local lastTransactionId = (self.ledger_db:get("lastTransactionId") or 0) + 1
-    local new_entry = {}
-    table.insert(new_entry, {
+    local new_entry = {
             timestamp = os.epoch("utc"),
             type = transactionType,
             item = itemName,
@@ -97,10 +98,8 @@ function ledger:addLedgerEntry(transactionType, itemName, itemDamage, quantity, 
             source = source,
             destination = destination,
             details = details or {}
-    })
-    
-    --tansaction_list[lastTransactionId] = new_entry
-
+    }
+    table.insert(tansaction_list,new_entry)
     self.ledger_db:set("transactions",tansaction_list)
     self.ledger_db:set("lastTransactionId", lastTransactionId)
     return new_entry
@@ -155,20 +154,9 @@ function ledger:updateItemInDatabase(itemName, itemDamage, changeAmount, chestNa
                   {slot = slotIndex})
 end
 
--- currently unused and unimplemented (waiting for final ledger layout)
-function ledger:validateTransactions()
-    -- should loop over transactions since last serialisation of db and check that its valid 
-    -- if there is a missmatch it should throw a DB_CORRUPTION_FAULT
-    local trans = self.ledger_db:get("transactions")
-    local freeSlots = self.storage_db:get("free")
-    local slots = self.storage_db:get("items")
-
-    for _, t in ipairs(trans) do
-        if(t.transactionType == "DEPOSIT") then
-            --if(slots[t.item]t.destination 
-
-        elseif(t.transactionType == "WITHDRAWAL") then
-
-        end
-    end
+function ledger:getLastTransaction()
+    local trans  = self.ledger_db:get("transactions") or {}
+    local lastTransactionId = self.ledger_db:get("lastTransactionId")
+    if (trans == {}) then print("no transactions in ledger"); return {} end
+    return trans[lastTransactionId-1] or {}
 end
