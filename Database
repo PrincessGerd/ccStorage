@@ -1,0 +1,63 @@
+if fs.exists("json") then
+    os.loadAPI("json")
+else 
+    print("missing required: json")
+    print("download from : https://github.com/coolacid/ComputerCraft/blob/master/external/json.lua")
+end
+
+-- modified verion of jsondb.lua by truemedian
+-- https://gist.github.com/truemedian/dc80d58a17ef3116233153e8e85ebf14
+
+local Database = {}
+Database.__index = Database
+
+function load(path)
+    local self = setmetatable({}, Database)
+
+    self.path = path
+    self.dirty = false
+
+    local file = io.open(path, "r")
+    if file then
+        local data = file:read("*a")
+        file:close()
+
+        if data == '' then
+            self.data = {}
+        else
+            self.data = json.parseValue(data)
+            assert(type(self.data) == 'table', 'invalid data schema')
+        end
+    else
+        self.data = {}
+    end
+    
+    return self
+end
+
+function Database:save()
+    if not self.dirty then
+        return
+    end
+
+    local tmpname = self.path .. '.tmp'
+    local data = json.encode(self.data)
+    
+    local file = assert(io.open(tmpname, "w"))
+    file:write(data)
+    file:close()
+    if fs.exists(self.path) then
+        fs.delete(self.path)
+    end
+    fs.move(tmpname, self.path)
+    assert(fs.exists(self.path))
+end
+
+function Database:get(key)
+    return self.data[key]
+end
+
+function Database:set(key, value)
+    self.data[key] = value
+    self.dirty = true
+end

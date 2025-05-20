@@ -1,0 +1,185 @@
+os.loadAPI("Database")
+
+local LOCAL_DB_PATH_TOP = "db/storage_top.json"
+local LOCAL_DB_PATH_BOTTOM = "db/storage_bottom.json"
+local ledger_db_PATH = "db/ledger.json"
+
+local storage_db_top = Database.load(LOCAL_DB_PATH_TOP)
+local storage_db_bottom = Database.load(LOCAL_DB_PATH_BOTTOM)
+local ledger_db = Database.load(ledger_db_PATH)
+
+local config = {
+    storage_top = Database.load(LOCAL_DB_PATH_TOP),
+    storage_bottom = Database.load(LOCAL_DB_PATH_BOTTOM),
+    ledger_db = Database.load(ledger_db_PATH),
+    CHEST_TYPES = {"minecraft:ironchest_crystal"},
+    MAX_SNAPSHOTS = 5
+}
+
+-- init empty structure and file if it doesnt already exist
+local function initDatabase(side)
+    local db_path = side == "top" and LOCAL_DB_PATH_TOP or LOCAL_DB_PATH_BOTTOM
+    local db = side == "top" and config.storage_top or config.storage_bottom
+    
+    if not fs.exists("db") then
+        fs.makeDir("db")
+    end
+
+    -- init storage database
+    if not fs.exists(db_path) then
+        file = io.open(db_path, "w")
+        file:write("")
+        file:close()
+        db:set("version", 1)
+        db:set("items", {})
+        db:set("free", {slots = {}})
+        db:set("lastScan", 0)
+        print("Created new " .. side .. " storage database")
+    end
+
+    -- init ledger, same for both registers
+    if not fs.exists(ledger_db_PATH) then
+        file = io.open(ledger_db_PATH, "w")
+        file:write("")
+        file:close()
+        config.ledger_db:set("version", 1)
+        config.ledger_db:set("transactions", {})
+        config.ledger_db:set("lastTransactionId", 0)
+        config.ledger_db:set("snapshots", {})
+        print("Created new ledger database")
+    end
+end
+
+local function scanChests(side)
+    local db = side == "top" and config.storage_top or config.storage_bottom
+    
+    local items = {}
+    local freeSlots = {slots = {}}
+    local foundSlots = {}
+    
+    -- get all valid chests in current scope
+    local chests = {}
+    for _, name in pairs(peripheral.wrap(side).getNamesRemote()) do
+        for _, chestType in pairs(config.CHEST_TYPES) do
+            if peripheral.getType(name):find(chestType) then
+                table.insert(chests, {
+                    name = name,
+                    peripheral = peripheral.wrap(name)
+                })
+                break
+            end
+        end
+    end
+
+    -- index the database 
+    for _, chest in ipairs(chests) do
+        local size = chest.peripheral.size()
+        for slot = 1, size do
+            local item = chest.peripheral.getItemMeta(slot)
+            if item then
+
+                if not items[item.name] then
+                    items[item.name] = {
+                        count = 0,
+                        maxCount = item.maxCount,
+                        slots = {}
+                    }
+                end
+
+                table.insert(items[item.name].slots, {
+                    chest = chest.name,
+                    index = slot,
+                    qty = item.count,
+                    dmg = item.damage or 0
+                })
+
+                items[item.name].count = items[item.name].count + item.count
+                foundSlots[chest.name..":"..slot] = true
+            end
+        end
+    end
+
+    -- build free list
+    for _, chest in ipairs(chests) do
+        local size = chest.peripheral.size()
+        for slot = 1, size do
+            if not foundSlots[chest.name..":"..slot] then
+                table.insert(freeSlots.slots, {
+                    chest = chest.name,
+                    index = slot
+                })
+            end
+        end
+    end
+
+    db:set("items", items)
+    db:set("free", freeSlots)
+    db:set("lastScan", os.epoch("utc"))
+end
+
+local function initialize()
+    print("Initializing storage databases...")
+    
+    initDatabase("top")
+    initDatabase("bottom")
+    
+    print("Scanning top chest contents...")
+    local success_top, err_top = pcall(scanChests, "top")
+    if not success_top then
+        printError("Failed to scan top chests: "..err_top)
+    end
+    
+    print("Scanning bottom chest contents...")
+    local success_bottom, err_bottom = pcall(scanChests, "bottom")
+    if not success_bottom then
+        printError("Failed to scan bottom chests: "..err_bottom)
+    end
+    
+    if not success_top and not success_bottom then
+        return false
+    end
+    
+    config.storage_top:save()
+    config.storage_bottom:save()
+    config.ledger_db:save()
+
+    local function reportStatus(side)
+        local db = side == "top" and config.storage_top or config.storage_bottom
+        local items = db:get("items") or {}
+        local itemCount = 0
+        for _ in pairs(items) do itemCount = itemCount + 1 end
+        
+        local freeSlots = db:get("free") or {slots = {}}
+        
+        print(side .. " storage:")
+        print("  Found "..itemCount.." unique items")
+        print("  Free slots available: "..#freeSlots.slots)
+    end
+    
+    reportStatus("top")
+    reportStatus("bottom")
+    
+    print("Database initialization complete!")
+    return success_top or success_bottom
+end
+
+if not initialize() then
+    printError("Initialization failed for both sides!")
+else
+    print("Successfully initialized storage system")
+end
+
+if not shell then
+    return {
+        init = initialize,
+        config = config,
+        rescanChests = function(side) 
+            if side == "top" or side == "bottom" then
+                return scanChests(side)
+            else
+                error("Invalid side, must be 'top' or 'bottom'")
+            end
+        end,
+        createSnapshot = createInitialSnapshot
+    }
+end

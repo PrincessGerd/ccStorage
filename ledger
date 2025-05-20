@@ -1,0 +1,174 @@
+-- Storage Constants
+if fs.exists("Database") then os.loadAPI("Database") else return nil end
+
+local ledger = {}
+ledger.__index = ledger
+
+local NORMAL_STACK_SIZE = 64
+local SMALL_STACK_SIZE = 16
+local UNSTACKABLE = 1
+local LEDGER_MAX_ENTRIES = 1000
+
+function init(db_path, ledger_path)
+    local self = setmetatable({}, ledger)
+    if db_path ~= nil and ledger_path ~= nil then
+        self.LOCAL_DB_PATH = db_path
+        self.LEDGER_DB_PATH = ledger_path
+        self.storage_db = Database.load(self.LOCAL_DB_PATH)
+        self.ledger_db = Database.load(self.LEDGER_DB_PATH)
+        assert(self.storage_db ~= nil, "storage_db must be provided")
+        assert(self.ledger_db ~= nil, "ledger_db must be provided")
+    end
+    return self
+end
+
+function ledger:load()
+    if self.storage_db == nil then
+        self.storage_db:save()
+    end
+    if self.ledger_db == nil then
+        self.ledger_db:save()
+    end
+end
+
+function ledger:save()
+    if self.storage_db ~= nil then
+        self.storage_db = Database.load(self.LOCAL_DB_PATH)
+    end
+    if self.ledger_db ~= nil then
+        self.ledger_db = Database.load(self.LEDGER_DB_PATH)
+    end
+end
+
+-- Helper function to get item data
+function ledger:getItemData(itemName)
+    local itemlist = self.storage_db:get("items") or {}
+    local item = itemlist[itemName]
+    if not item then
+        return {
+            count = 0,
+            maxCount = NORMAL_STACK_SIZE,
+            slots = {}
+        }
+    end
+    return item
+end
+
+-- Free slots management
+function ledger:getFreeSlots()
+    local free = self.storage_db:get("free") or {slots = {}}
+    return free
+end
+
+function ledger:setFreeSlots(freeSlots)
+    if next(freeSlots) == nil then return end
+    self.storage_db:set("free",freeSlots)
+end
+
+function ledger:addToFreeSlots(chestName, slotIndex)
+    local free = self:getFreeSlots()
+    table.insert(free.slots, {chest = chestName, index = slotIndex})
+    self.storage_db:set("free",free)
+end
+
+function ledger:removeFromFreeSlots(chestName, slotIndex)
+    local free = self:getFreeSlots()
+    for i, slot in ipairs(free.slots) do
+        if slot.chest == chestName and slot.index == slotIndex then
+            table.remove(free.slots, i)
+            self.storage_db:set("free",free)
+            return
+        end
+    end
+end
+
+
+-- Ledger functions
+function ledger:addLedgerEntry(transactionType, itemName, itemDamage, quantity, source, destination, details)
+    local tansaction_list = self.ledger_db:get("transactions") or {}
+    local lastTransactionId = (self.ledger_db:get("lastTransactionId") or 0) + 1
+    local new_entry = {}
+    table.insert(new_entry, {
+            timestamp = os.epoch("utc"),
+            type = transactionType,
+            item = itemName,
+            damage = itemDamage or 0,
+            quantity = quantity,
+            source = source,
+            destination = destination,
+            details = details or {}
+    })
+    
+    --tansaction_list[lastTransactionId] = new_entry
+
+    self.ledger_db:set("transactions",tansaction_list)
+    self.ledger_db:set("lastTransactionId", lastTransactionId)
+    return new_entry
+end
+
+-- Update database when items are moved
+function ledger:updateItemInDatabase(itemName, itemDamage, changeAmount, chestName, slotIndex, action)
+    local db = self.storage_db:get("items") or {}
+    db[itemName] = db[itemName] or {
+        count = 0,
+        maxCount = NORMAL_STACK_SIZE,
+        slots = {}
+    }
+    local item = db[itemName]
+    local slotFound = false
+    
+    -- Update existing slot if found
+    for i, slot in ipairs(item.slots) do
+        if slot.chest == chestName and slot.index == slotIndex then
+            slot.count = slot.count + changeAmount
+            slot.damage = itemDamage
+            slotFound = true
+            if slot.count <= 0 then
+                -- Remove empty slots
+                table.remove(item.slots, i)
+                self:addToFreeSlots(chestName, slotIndex)
+            end
+            break
+        end
+    end
+    
+    -- Add new slot if needed
+    if not slotFound and changeAmount > 0 then
+        self:removeFromFreeSlots(chestName, slotIndex)
+        table.insert(item.slots, {
+            chest = chestName,
+            index = slotIndex,
+            count = changeAmount,
+            damage = itemDamage
+        })
+    end
+    
+    -- Update total count
+    item.count = item.count + changeAmount
+    db[itemName] = item
+    self.storage_db:set("items",db)
+    
+    -- Record in ledger
+     self:addLedgerEntry(action, itemName, itemDamage, changeAmount, 
+                  action == "DEPOSIT" and "external" or chestName,
+                  action == "DEPOSIT" and chestName or "external",
+                  {slot = slotIndex})
+end
+
+-- currently unused and unimplemented (waiting for final ledger layout)
+function ledger:validateTransactions()
+    -- should loop over transactions since last serialisation of db and check that its valid 
+    -- if there is a missmatch it should throw a DB_CORRUPTION_FAULT
+    local trans = self.ledger_db:get("transactions")
+    local freeSlots = self.storage_db:get("free")
+    local slots = self.storage_db:get("items")
+
+    for _, t in ipairs(trans) do
+        if(t.transactionType == "DEPOSIT") then
+            --if(slots[t.item]t.destination 
+
+        elseif(t.transactionType == "WITHDRAWAL") then
+
+        end
+    end
+end

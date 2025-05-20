@@ -1,0 +1,215 @@
+local function loadAPI(name, pastebinId)
+    if not fs.exists(name) then
+        shell.run("pastebin get "..pastebinId.." "..name)
+    end
+    if not os.loadAPI(name) then
+        error("Failed to load "..name.." API")
+    end
+end
+
+loadAPI("event", "UKPy4iiE")
+loadAPI("utils", "dyvydHtK")
+if not os.loadAPI("ledger") then error("Failed to load ledger API") end
+if not os.loadAPI("itemtransfer") then error("Failed to load itemtransfer API") end
+
+local LOCAL_DB_PATH = "db/storage_"
+local LEDGER_DB_PATH = "db/ledger.json"
+
+
+local OPPERATIONAL = 0
+local DB_CORRUPTION_FAULT = -1          -- item slot indexing is corrupted
+local TRANSFER_FAULTY_ID_DETECTED = -2  -- gven item id is not the actual id
+local TRANSFER_QTY_MISMATCH = -3        -- less severe version of DB_CORRUPTION_FAULT
+local REGISTER_SELECT_FAULT = -4        -- unused / depricated
+local TRANSFER_EMPTY_SLOT_GIVEN = -5    -- no item in input chest
+
+local internal_state = {
+    flag = 0,
+    register = nil,
+    lastTransaction = {},
+    storage = {
+        top = nil,   
+        bottom = nil
+    },
+    ra = nil,           -- return address
+    workerId = "..."    -- invalid address as default
+}
+
+
+-- helper to initialize storage systems
+local function initStorage(register)
+    return itemtransfer.init(ledger.init(LOCAL_DB_PATH..register..".json", LEDGER_DB_PATH))
+end
+
+-- select which storage to use
+local function getActiveStorage()
+    if internal_state.register == "top" then
+        return internal_state.storage.top
+    end
+    return internal_state.storage.bottom
+end
+
+-- the workerId is a temporary(prob gonn be permanent) fix. 
+-- since top and bot is seperate networks. the turtle has a seperate id on each
+local function selectRegister(reg)
+    if(reg == "top") then
+        internal_state.register = "top"
+        internal_state.workerId = "turtle_"..os.getComputerID() 
+    elseif(reg == "bottom") then
+        internal_state.register = "bottom"
+        internal_state.workerId = "turtle_"..(os.getComputerID() + 1)
+    end
+    return internal_state.register
+end
+
+-- Initialize the system
+local function init(register, db_path, ledger_path, return_address)
+    internal_state.flag = OPPERATIONAL
+    internal_state.register = register
+    internal_state.storage.top = initStorage("top")
+    internal_state.storage.bottom = initStorage("bottom")
+    internal_state.workerId = "turtle_"..os.getComputerID() or "turtle_15"
+    print("initialised: " .. internal_state.workerId)
+end
+
+-- assumes quantity is correct, only strict about item id
+-- remains unused for the time being
+local function validate_fetch()
+    local item = turtle.getItemDetail(1) -- all items should be set to slot 1
+    local storage = getActiveStorage()
+    if(internal_state.lastTransaction.item ~= item.name) then
+        local chest_to_return = internal_state.lastTransaction.source
+        storage:deposit(internal_state.lastTransaction.item,
+                            internal_state.lastTransaction.quantity,
+                            internal_state.lastTransaction.damage,
+                            chest_to_return
+                            )
+        internal_state.flag = DB_CORRUPTION_FAULT
+        return false
+    end
+    return true
+end
+
+-- works with qty range 0 -> 64
+local function safe_fetch(itemName, qty, itemDamage)
+    local storage = getActiveStorage()
+    local ret_len = storage:fetch(itemName, qty, itemDamage, internal_state.workerId)
+    
+    if ret_len ~= qty then
+        internal_state.flag = TRANSFER_QTY_MISMATCH
+        print("TRANSFER_QTY_MISMATCH")
+        return 0
+    end
+    local item = turtle.getItemDetail(1)
+    if(item.name ~= itemName) then
+        internal_state.flag = DB_CORRUPTION_FAULT
+        print("DB_CORRUPTION_FAULT")
+        return ret_len
+    end
+    return ret_len
+end
+
+-- works with qty range 0 -> 64
+local function safe_deposit(itemName, qty, itemDamage)
+    local item = turtle.getItemDetail(1)
+    if(item == nil) then internal_state.flag = TRANSFER_EMPTY_SLOT_GIVEN; return 0 end 
+    if( item.name ~= itemName or item.damage ~= itemDamage) then
+        internal_state.flag = TRANSFER_FAULTY_ID_DETECTED
+        -- add return for item
+        print("TRANSFER_FAULTY_ID_DETECTED ")
+        return  0
+    end
+    
+    local storage = getActiveStorage()
+    local deposited_total = storage:deposit(itemName, qty, itemDamage, internal_state.workerId)
+    
+    if(deposited_total ~= qty) then
+        internal_state.flag = TRANSFER_QTY_MISMATCH
+        return deposited_total
+    end
+    print("deposited")
+    return deposited_total
+end
+
+
+-- modems
+local LOCAL_CHANNEL=666
+local PING_LIMIT = 10
+
+modem =  peripheral.wrap("right") or error("No modem found")
+modem.open(LOCAL_CHANNEL)
+
+
+init("top", LOCAL_DB_PATH, LEDGER_DB_PATH, "minecraft:ironchest_iron_25")
+
+-- message handles 
+local messageHander ={
+    ["depositItem"] = function(replyChannel, message)
+        local parts = utils.getSplits(message, "|")
+        turtle.suck()
+        local deposited = safe_deposit(parts[2], tonumber(parts[3]), tonumber(parts[4]))
+        return string.format("depositResult|%s|%d|%d", parts[2], deposited, tonumber(parts[3]))
+    end,
+    
+    ["fetchItem"] = function(replyChannel, message)
+        local parts = utils.getSplits(message, "|")
+        local fetched = safe_fetch(parts[2], tonumber(parts[3]), tonumber(parts[4]))
+        turtle.drop()
+        return string.format("fetchResult|%s|%d|", parts[2], fetched)
+    end,
+
+    ["selectStorage"] = function(replyChannel, message)
+        local parts = utils.getSplits(message, "|")
+        local selection = selectRegister(parts[2])
+        return string.format("selectRegister|%s|", parts[2])
+    end
+}
+
+
+function handleMessages(side,channel,replyChannel,message)
+    print(replyChannel.." : "..message)
+    local messageType=utils.split(message,"|",1)
+    print(messageType)
+    print(message)
+    if messageHander[messageType]==nil then return end
+    local returnMessage=messageHander[messageType](replyChannel,message)
+    event.handleCCEvents(0.10)
+    if returnMessage==nil then
+        print("unkwown request : " .. messageType) 
+        return 
+    end
+    print(replyChannel .. " : " .. returnMessage)
+    modem.transmit(replyChannel,LOCAL_CHANNEL,returnMessage)
+end
+event.addHandler("modem_message",handleMessages)
+
+-- Main system loop
+
+
+
+function mainloop()
+    while true do
+        --local startTime = os.clock()
+        
+        -- Handle events with timeout
+        event.handleCCEvents(0.5)
+        
+        -- Perform periodic tasks every 10 seconds
+        --if os.clock() % 10 < 0.1 then
+        --end
+    end
+end
+
+local function protectedRun()
+    local success, err = pcall(mainloop)
+    if not success then
+        term.clear()
+        print("CRITICAL ERROR:")
+        print(err)
+    end
+end
+ 
+-- Start the system
+protectedRun()
+
+print("ENDED GRACEFULLY")
