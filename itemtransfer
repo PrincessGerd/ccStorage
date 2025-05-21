@@ -19,8 +19,9 @@ function itemtransfer:lookup(itemName, qty)
 end
 
 
-function itemtransfer:deposit(itemName, qty, itemDamage, fromChest, fromSlot=1)
+function itemtransfer:deposit(itemName, qty, itemDamage, fromChest, fromSlot)
     --print(itemName .. "|" .. qty .. "|" .. itemDamage .. "|" .. fromChest)
+    fromSlot = fromSlot or 1
     local item =  self.ledger_internal:getItemData(itemName)
     local remaining = qty
     local depositedTotal = 0
@@ -29,7 +30,7 @@ function itemtransfer:deposit(itemName, qty, itemDamage, fromChest, fromSlot=1)
     for _, slot in ipairs(item.slots) do
         if remaining <= 0 then break end
         if slot.damage == itemDamage and slot.count < item.maxCount then
-            local space = item.maxCount - slot.count
+            local space = math.abs(item.maxCount - slot.count)
             local toDeposit = math.min(remaining, space)
             
             local deposited = peripheral.call(slot.chest, "pullItems", fromChest, fromSlot, toDeposit, slot.index)
@@ -64,7 +65,8 @@ function itemtransfer:deposit(itemName, qty, itemDamage, fromChest, fromSlot=1)
     return depositedTotal
 end
 
-function itemtransfer:fetch(itemName, qty, itemDamage, toChest, toSlot=1)
+function itemtransfer:fetch(itemName, qty, itemDamage, toChest)
+    toSlot = toSlot or 1
     local item =  self.ledger_internal:getItemData(itemName)
     local remaining = qty
     local fetchedTotal = 0
