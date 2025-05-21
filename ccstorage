@@ -1,22 +1,28 @@
-local function loadAPI(name, pastebinId)
-    if not fs.exists(name) then
-        shell.run("pastebin get "..pastebinId.." "..name)
-    end
-    if not os.loadAPI(name) then
-        error("Failed to load "..name.." API")
-    end
-end
+--local function loadAPI(name, pastebinId)
+--    if not fs.exists(name) then
+--        shell.run("pastebin get "..pastebinId.." "..name)
+--    end
+--    if not os.loadAPI(name) then
+--        error("Failed to load "..name.." API")
+--    end
+--end
 
-loadAPI("event", "UKPy4iiE")
-loadAPI("utils", "dyvydHtK")
-if not os.loadAPI("ledger") then error("Failed to load ledger API") end
-if not os.loadAPI("itemtransfer") then error("Failed to load itemtransfer API") end
+local event = require("event")
+local utils = require("utils")
+local ledger = require("ledger")
+local itemtransfer = require("itemtransfer")
+
+--loadAPI("event", "UKPy4iiE")
+--loadAPI("utils", "dyvydHtK")
+--if not os.loadAPI("ledger") then error("Failed to load ledger API") end
+--if not os.loadAPI("itemtransfer") then error("Failed to load itemtransfer API") end
 
 -- local variables
 local LOCAL_DB_PATH = "db/storage_"
 local LEDGER_DB_PATH = "db/ledger.json"
 local LOCAL_MODEM_SIDE = "right"
 local TURTLE_ID = 21
+local CONTROLER_CHANNEL = 666
 
 local OPPERATIONAL = 0
 local DB_CORRUPTION_FAULT = -1          -- item slot indexing is corrupted
@@ -36,7 +42,6 @@ local internal_state = {
     ra = nil,           -- return address
     workerId = "..."    -- invalid address as default
 }
-
 
 -- helper to initialize storage systems
 local function initStorage(register)
@@ -74,27 +79,9 @@ local function init(register, db_path, ledger_path, return_address)
     print("initialised: " .. internal_state.workerId)
 end
 
--- assumes quantity is correct, only strict about item id
--- remains unused for the time being
-local function validate_fetch()
-    local item = turtle.getItemDetail(1) -- all items should be set to slot 1
-    local storage = getActiveStorage()
-    if(internal_state.lastTransaction.item ~= item.name) then
-        local chest_to_return = internal_state.lastTransaction.source
-        storage:deposit(internal_state.lastTransaction.item,
-                            internal_state.lastTransaction.quantity,
-                            internal_state.lastTransaction.damage,
-                            chest_to_return
-                            )
-        internal_state.flag = DB_CORRUPTION_FAULT
-        return false
-    end
-    return true
-end
 
 -- works with qty range 0 -> 64
-local function safe_fetch(itemName, qty, itemDamage)
-    local storage = getActiveStorage()
+local function safe_fetch(itemName, qty, itemDamag,storage)
     local ret_len = storage:fetch(itemName, qty, itemDamage, internal_state.workerId)
     
     if ret_len ~= qty then
@@ -108,12 +95,12 @@ local function safe_fetch(itemName, qty, itemDamage)
         print("DB_CORRUPTION_FAULT")
         return ret_len
     end
-    internal_state.lastTransaction = storage.ledger_internal:getLastTransaction()
     return ret_len
 end
 
 -- works with qty range 0 -> 64
-local function safe_deposit(itemName, qty, itemDamage)
+-- a bit overkill
+local function safe_deposit(itemName, qty, itemDamage, storage)
     local item = turtle.getItemDetail(1)
     if(item == nil) then internal_state.flag = TRANSFER_EMPTY_SLOT_GIVEN; return 0 end 
     if( item.name ~= itemName or item.damage ~= itemDamage) then
@@ -123,23 +110,47 @@ local function safe_deposit(itemName, qty, itemDamage)
         return  0
     end
     
-    local storage = getActiveStorage()
     local deposited_total = storage:deposit(itemName, qty, itemDamage, internal_state.workerId)
     
     if(deposited_total ~= qty) then
         internal_state.flag = TRANSFER_QTY_MISMATCH
         return deposited_total
     end
-    print("deposited")
-    internal_state.lastTransaction = storage.ledger_internal:getLastTransaction()
     return deposited_total
 end
 
+-- works with qty range 0 -> STORAGE_SIZE
+local function deposit_with_validation(itemName, qty, itemDamage)
+    local storage = getActiveStorage()
+    local deposited = 0
+    local cur_ret = 0
+    while deposted < qty do
+        if(not turtle.suck()) then if(not turtle.suck())then break end end --try twice before exiting
+        cur_ret = safe_deposit(itemName, qty, itemDamage, internal_state.workerId,storage)
+        if(cur_ret < 0 ) then break end
+        if(not turtle.drop()) then if(not turtle.drop())then break end end --try twice before exiting
+        deposited = deposited  + cur_ret
+    end
+    return deposited
+end
+
+-- works with qty range 0 -> STORAGE_SIZE
+local function fetch_with_validation(itemName, qty, itemDamage)
+    local storage = getActiveStorage()
+    local fetched = 0
+    local cur_ret = 0
+    while fetched < qty do
+        cur_ret = safe_fetch(itemName, qty, itemDamage, internal_state.workerId,storage)
+        if(cur_ret < 0 ) then break end
+        if(not turtle.drop()) then if(not turtle.drop())then break end end --try twice before exiting
+        fetched = fetched  + cur_ret
+    end
+    return fetched
+end
 
 -- modems
-local LOCAL_CHANNEL=666
+local LOCAL_CHANNEL=math.random()
 local PING_LIMIT = 10
-
 modem =  peripheral.wrap(LOCAL_MODEM_SIDE) or error("No modem found")
 modem.open(LOCAL_CHANNEL)
 
@@ -151,13 +162,13 @@ local messageHander ={
     ["depositItem"] = function(replyChannel, message)
         local parts = utils.getSplits(message, "|")
         turtle.suck()
-        local deposited = safe_deposit(parts[2], tonumber(parts[3]), tonumber(parts[4]))
+        local deposited = deposit_with_validation(parts[2], tonumber(parts[3]), tonumber(parts[4]))
         return string.format("depositResult|%s|%d|%d", parts[2], deposited, tonumber(parts[3]))
     end,
     
     ["fetchItem"] = function(replyChannel, message)
         local parts = utils.getSplits(message, "|")
-        local fetched = safe_fetch(parts[2], tonumber(parts[3]), tonumber(parts[4]))
+        local fetched = fetch_with_validation(parts[2], tonumber(parts[3]), tonumber(parts[4]))
         turtle.drop()
         return string.format("fetchResult|%s|%d|", parts[2], fetched)
     end,
@@ -184,8 +195,7 @@ local messageHander ={
            ret_str = string.format("getLastTransaction|%s|%s|%s|%d", lt.source,lt.destination, lt.item,lt.quantity)
         end
         return ret_str
-    end,
-
+    end
 }
 
 
@@ -211,6 +221,9 @@ event.addHandler("modem_message",handleMessages)
 
 
 function mainloop()
+    local msg = "ready|storage|turtle_"..TURTLE_ID.."|"..LOCAL_CHANNEL
+    modem.transmit(CONTROLER_CHANNEL,LOCAL_CHANNEL,msg)
+    modem.recive
     while true do
         local startTime = os.clock()
         
@@ -238,5 +251,5 @@ end
  
 -- Start the system
 protectedRun()
-modem.close()
+modem.close(LOCAL_MODEM_SIDE)
 print("ENDED GRACEFULLY")

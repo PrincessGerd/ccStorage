@@ -1,5 +1,6 @@
 -- Storage Constants
-if fs.exists("Database") then os.loadAPI("Database") else return nil end
+--if fs.exists("Database") then os.loadAPI("Database") else return nil end
+local Database = require("Database")
 
 local ledger = {}
 ledger.__index = ledger

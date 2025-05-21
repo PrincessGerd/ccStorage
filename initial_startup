@@ -1,4 +1,4 @@
-os.loadAPI("Database")
+local Database = require("Database")
 
 local LOCAL_DB_PATH_TOP = "db/storage_top.json"
 local LOCAL_DB_PATH_BOTTOM = "db/storage_bottom.json"

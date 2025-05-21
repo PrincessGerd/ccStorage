@@ -19,7 +19,7 @@ function itemtransfer:lookup(itemName, qty)
 end
 
 
-function itemtransfer:deposit(itemName, qty, itemDamage, fromChest)
+function itemtransfer:deposit(itemName, qty, itemDamage, fromChest, fromSlot=1)
     --print(itemName .. "|" .. qty .. "|" .. itemDamage .. "|" .. fromChest)
     local item =  self.ledger_internal:getItemData(itemName)
     local remaining = qty
@@ -32,7 +32,7 @@ function itemtransfer:deposit(itemName, qty, itemDamage, fromChest)
             local space = item.maxCount - slot.count
             local toDeposit = math.min(remaining, space)
             
-            local deposited = peripheral.call(slot.chest, "pullItems", fromChest, 1, toDeposit, slot.index)
+            local deposited = peripheral.call(slot.chest, "pullItems", fromChest, fromSlot, toDeposit, slot.index)
             if deposited > 0 then
                 self.ledger_internal:updateItemInDatabase(itemName, itemDamage, deposited, slot.chest, slot.index, "DEPOSIT")
                 remaining = remaining - deposited
@@ -64,7 +64,7 @@ function itemtransfer:deposit(itemName, qty, itemDamage, fromChest)
     return depositedTotal
 end
 
-function itemtransfer:fetch(itemName, qty, itemDamage, toChest)
+function itemtransfer:fetch(itemName, qty, itemDamage, toChest, toSlot=1)
     local item =  self.ledger_internal:getItemData(itemName)
     local remaining = qty
     local fetchedTotal = 0
@@ -76,7 +76,7 @@ function itemtransfer:fetch(itemName, qty, itemDamage, toChest)
         if remaining <= 0 then break end
         if (not itemDamage or slot.damage == itemDamage) then
             local toFetch = math.min(remaining, slot.count)
-            local fetched = peripheral.call(slot.chest, "pushItems", toChest, slot.index, toFetch, 1)
+            local fetched = peripheral.call(slot.chest, "pushItems", toChest, slot.index, toFetch, toSlot)
             
             if fetched > 0 then
                 self.ledger_internal:updateItemInDatabase(itemName, slot.damage, -fetched, slot.chest, slot.index, "WITHDRAWAL")
