@@ -7,22 +7,19 @@ local function loadAPI(name, pastebinId)
     end
 end
 
---local event = require("event")
---local utils = require("utils")
---local ledger = require("ledger")
---local itemtransfer = require("itemtransfer")
-
 loadAPI("event", "UKPy4iiE")
 loadAPI("utils", "dyvydHtK")
 if not os.loadAPI("ledger") then error("Failed to load ledger API") end
 if not os.loadAPI("itemtransfer") then error("Failed to load itemtransfer API") end
 
 -- local variables
+local TURTLE_ID = 236
+local EXTERNAL_ACCESS_ID = "turtle_370"
+local LOCAL_CHANNEL= 666
+
 local LOCAL_DB_PATH = "db/storage_"
 local LEDGER_DB_PATH = "db/ledger.json"
 local LOCAL_MODEM_SIDE = "right"
-local TURTLE_ID = 21
-local CONTROLER_CHANNEL = 666
 
 local OPPERATIONAL = 0
 local DB_CORRUPTION_FAULT = -1          -- item slot indexing is corrupted
@@ -120,13 +117,15 @@ local function safe_deposit(itemName, qty, itemDamage)
 end
 
 -- works with qty range 0 -> STORAGE_SIZE
-local function deposit_with_validation(itemName, qty, itemDamage)
+local function deposit_with_validation(itemName, qty, itemDamage, target, target_indecies)
     local deposited = 0
     local cur_qty = 64 -- assume stacksize 64
     local cur_ret = 0
     while deposited < qty do
-        if(not turtle.suck()) then if(not turtle.suck())then print("suck failed"); break end end --try twice before exiting
-        cur_ret = safe_deposit(itemName, cur_qty, itemDamage, internal_state.workerId)
+        local target_idx = tonumber(table.remove(target_indecies))
+        local pushed = peripheral.call(target, "pullItems",EXTERNAL_ACCESS_ID ,target_idx, cur_qty, 1)
+        if (not pushed or pushed <= 0) then print("Unable to pull items from location: [ "..target.." , "..target_idx.." ]"); break; end
+        cur_ret = safe_deposit(itemName, cur_qty, itemDamage)
         if(cur_ret < 0 ) then break end
         if (cur_ret < cur_qty) then cur_qty = cur_ret end
         deposited = deposited  + cur_ret
@@ -135,14 +134,15 @@ local function deposit_with_validation(itemName, qty, itemDamage)
 end
 
 -- works with qty range 0 -> STORAGE_SIZE
-local function fetch_with_validation(itemName, qty, itemDamage)
+local function fetch_with_validation(itemName, qty, itemDamage, target)
     local fetched = 0
     local cur_qty = 64 -- assume stacksize 64
     local cur_ret = 0
     while fetched < qty do
-        cur_ret = safe_fetch(itemName, cur_qty, itemDamage, internal_state.workerId)
+        cur_ret = safe_fetch(itemName, cur_qty, itemDamage)
         if(cur_ret < 0 ) then break end
-        if(not turtle.drop()) then if(not turtle.drop())then break end end --try twice before exiting
+        local pushed = peripheral.call(target, "pullItems", EXTERNAL_ACCESS_ID , 1, cur_ret)
+        if (pushed ~= cur_ret) then print("Uable to push items to location: [ "..target.." ]") break; end
         if (cur_ret < cur_qty) then cur_qty = cur_ret end
         fetched = fetched  + cur_ret
     end
@@ -150,27 +150,20 @@ local function fetch_with_validation(itemName, qty, itemDamage)
     return fetched
 end
 
--- modems
-local LOCAL_CHANNEL= 666--math.random()
-local PING_LIMIT = 10
-modem =  peripheral.wrap(LOCAL_MODEM_SIDE) or error("No modem found")
-modem.open(LOCAL_CHANNEL)
-
-
-init("top", LOCAL_DB_PATH, LEDGER_DB_PATH, "minecraft:ironchest_iron_25")
-
 -- message handles 
 local messageHander ={
+    -- depositItem|source|indecies(as. 1,2,3,4...,5)|name|qty|dmg|
     ["depositItem"] = function(replyChannel, message)
         local parts = utils.getSplits(message, "|")
-        local deposited = deposit_with_validation(parts[2], tonumber(parts[3]), tonumber(parts[4]))
-        return string.format("depositResult|%s|%d|%d", parts[2], deposited, tonumber(parts[3]))
+        local indecies = utils.getSplits(parts[3],",")
+        local deposited = deposit_with_validation(parts[4], tonumber(parts[5]), tonumber(parts[6]),parts[2],indecies)
+        return string.format("depositResult|%s|%d|%d", parts[4], deposited, tonumber(parts[5]))
     end,
-    
+    -- fetchItem|destination|name|qty|dmg|
     ["fetchItem"] = function(replyChannel, message)
         local parts = utils.getSplits(message, "|")
-        local fetched = fetch_with_validation(parts[2], tonumber(parts[3]), tonumber(parts[4]))
-        return string.format("fetchResult|%s|%d|", parts[2], fetched)
+        local fetched = fetch_with_validation(parts[3], tonumber(parts[4]), tonumber(parts[5]), parts[2])
+        return string.format("fetchResult|%s|%d|", parts[3], fetched)
     end,
 
     ["selectStorage"] = function(replyChannel, message)
@@ -198,7 +191,12 @@ local messageHander ={
     end
 }
 
+-- innit
+modem =  peripheral.wrap(LOCAL_MODEM_SIDE) or error("No modem found")
+modem.open(LOCAL_CHANNEL)
+init("top", LOCAL_DB_PATH, LEDGER_DB_PATH, "minecraft:ironchest_iron_25")
 
+-- message event handler
 function handleMessages(side,channel,replyChannel,message)
     print(replyChannel.." : "..message)
     local messageType=utils.split(message,"|",1)
@@ -217,9 +215,6 @@ end
 event.addHandler("modem_message",handleMessages)
 
 -- Main system loop
-
-
-
 function mainloop()
     --local msg = "ready|storage|turtle_"..TURTLE_ID.."|"..LOCAL_CHANNEL
     --modem.transmit(CONTROLER_CHANNEL,LOCAL_CHANNEL,msg)

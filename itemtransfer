@@ -76,7 +76,7 @@ function itemtransfer:fetch(itemName, qty, itemDamage, toChest)
     for i = #item.slots, 1, -1 do
         local slot = item.slots[i]
         if remaining <= 0 then break end
-        if (not itemDamage or slot.damage == itemDamage) then
+        if (itemDamage < 0 or slot.damage == itemDamage) then
             local toFetch = math.min(remaining, slot.count)
             local fetched = peripheral.call(slot.chest, "pushItems", toChest, slot.index, toFetch, toSlot)
             
